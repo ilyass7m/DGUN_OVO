@@ -1,0 +1,14 @@
+#Data
+Datasets/
+# Checkpoints et logs
+**/checkpoints/
+**/wandb/
+*.log
+
+# Fichiers notebook
+*.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# Fichiers locaux
+.claude/
+*.local.json
