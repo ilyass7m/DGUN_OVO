@@ -1,5 +1,6 @@
 #Data
-Datasets/
+*.png
+*.jpg
 # Checkpoints et logs
 **/checkpoints/
 **/wandb/
