@@ -33,6 +33,16 @@ def load_model(weights_path, n_feat=80, depth=5):
     return model
 
 
+def pad_to_multiple(img, multiple=16):
+    """Pad image so H and W are divisible by `multiple`. Returns padded image and original size."""
+    _, _, h, w = img.shape
+    pad_h = (multiple - h % multiple) % multiple
+    pad_w = (multiple - w % multiple) % multiple
+    if pad_h > 0 or pad_w > 0:
+        img = torch.nn.functional.pad(img, (0, pad_w, 0, pad_h), mode='reflect')
+    return img, (h, w)
+
+
 def evaluate(model, test_dir, sigma):
     dataset = GaussianDenoiseTestDataset(test_dir, sigma=sigma)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
@@ -41,7 +51,12 @@ def evaluate(model, test_dir, sigma):
     with torch.no_grad():
         for clean, noisy, fname in loader:
             clean, noisy = clean.cuda(), noisy.cuda()
-            restored = model(noisy)[0]
+
+            # Pad to multiple of 16 for U-Net compatibility
+            noisy_pad, (orig_h, orig_w) = pad_to_multiple(noisy, 16)
+            restored = model(noisy_pad)[0]
+            # Crop back to original size
+            restored = restored[:, :, :orig_h, :orig_w]
             restored = torch.clamp(restored, 0, 1)
 
             # Convert to numpy HWC uint8 for SSIM

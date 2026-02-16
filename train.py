@@ -1,14 +1,27 @@
 """
-Training script for DGUNet Gaussian Denoising.
+Training script for DGUNet Denoising.
 
-Usage:
-    python train.py --train_dir ./Datasets/DIV2K_train_HR --val_dir ./Datasets/DIV2K_valid_HR --sigma 25
+Supports three dataset modes:
+  1. synthetic: Clean images + synthetic Gaussian noise (DIV2K, BSD400)
+  2. paired: Preprocessed noisy/clean pairs (input/ and target/ subdirs)
+  3. sidd: Native SIDD structure (GT_SRGB_*.PNG and NOISY_SRGB_*.PNG)
 
-With wandb logging:
-    python train.py --train_dir ./Datasets/DIV2K_train_HR --val_dir ./Datasets/DIV2K_valid_HR --sigma 25 --wandb
+Usage (synthetic noise - DIV2K):
+    python train.py --dataset_mode synthetic --train_dir ./Datasets/DIV2K_train_HR --val_dir ./Datasets/DIV2K_valid_HR --sigma 25 --wandb
 
-Memory-optimized settings (default: batch_size=2, accum_steps=2 -> effective batch=4)
-For 4GB GPU, use: --batch_size 1 --accum_steps 4
+Usage (SIDD - native structure, no preprocessing needed):
+    python train.py --dataset_mode sidd --train_dir ./Datasets/SIDD_Small_sRGB_Only --val_dir ./Datasets/SIDD_Small_sRGB_Only --wandb
+
+    SIDD native structure (handled automatically):
+        SIDD_Small_sRGB_Only/
+            Data/
+                0001_001_S6_.../
+                    GT_SRGB_010.PNG      <- clean
+                    NOISY_SRGB_010.PNG   <- noisy
+
+Hyperparameters (matching paper):
+    - lr=1e-4, warmup_epochs=3, extended cosine annealing
+    - batch_size=2, accum_steps=2 -> effective batch=4 (paper uses 16)
 """
 
 import os
@@ -29,7 +42,11 @@ from tqdm import tqdm
 from skimage.metrics import structural_similarity as compare_ssim
 
 from DGUNet import DGUNet
-from dataset_denoise import GaussianDenoiseTrainDataset, GaussianDenoiseTestDataset
+from dataset_denoise import (
+    GaussianDenoiseTrainDataset, GaussianDenoiseTestDataset,
+    PairedDenoiseDataset, PairedDenoiseTestDataset,
+    SIDDTrainDataset, SIDDTestDataset
+)
 import losses
 import utils
 
@@ -38,18 +55,21 @@ def parse_args():
     parser = argparse.ArgumentParser(description='DGUNet Gaussian Denoising Training')
 
     # Data
-    parser.add_argument('--train_dir', type=str, required=True, help='Path to training images')
-    parser.add_argument('--val_dir', type=str, required=True, help='Path to validation images')
-    parser.add_argument('--sigma', type=int, default=25, help='Noise level (default: 25)')
+    parser.add_argument('--dataset_mode', type=str, default='synthetic', choices=['synthetic', 'paired', 'sidd'],
+                        help='Dataset mode: synthetic (Gaussian), paired (input/target dirs), sidd (native SIDD structure)')
+    parser.add_argument('--train_dir', type=str, required=True, help='Path to training data')
+    parser.add_argument('--val_dir', type=str, required=True, help='Path to validation data')
+    parser.add_argument('--sigma', type=int, default=25, help='Noise level for synthetic mode (default: 25)')
 
     # Training
-    parser.add_argument('--batch_size', type=int, default=2, help='Batch size (default: 2)')
+    parser.add_argument('--batch_size', type=int, default=4, help='Batch size (default: 2)')
     parser.add_argument('--patch_size', type=int, default=128, help='Training patch size (default: 128)')
-    parser.add_argument('--accum_steps', type=int, default=2, help='Gradient accumulation steps (default: 2)')
+    parser.add_argument('--accum_steps', type=int, default=1, help='Gradient accumulation steps (default: 2)')
     parser.add_argument('--patches_per_image', type=int, default=1, help='Patches per image per epoch (default: 1)')
     parser.add_argument('--epochs', type=int, default=80, help='Number of epochs (default: 80)')
-    parser.add_argument('--lr', type=float, default=2e-4, help='Learning rate (default: 2e-4)')
+    parser.add_argument('--lr', type=float, default=2e-4, help='Learning rate (default: 1e-4, same as paper)')
     parser.add_argument('--lr_min', type=float, default=1e-6, help='Minimum learning rate (default: 1e-6)')
+    parser.add_argument('--warmup_epochs', type=int, default=2, help='Warmup epochs (default: 3)')
 
     # Validation
     parser.add_argument('--val_every', type=int, default=5, help='Validate every N epochs (default: 5)')
@@ -65,7 +85,7 @@ def parse_args():
 
     # Checkpointing
     parser.add_argument('--save_dir', type=str, default='./checkpoints', help='Checkpoint directory')
-    parser.add_argument('--save_every', type=int, default=10, help='Save checkpoint every N epochs (default: 10)')
+    parser.add_argument('--save_every', type=int, default=20, help='Save checkpoint every N epochs (default: 10)')
     parser.add_argument('--name', type=str, default='dgunet', help='Experiment name')
     parser.add_argument('--resume', type=str, default=None, help='Resume from checkpoint')
 
@@ -149,9 +169,24 @@ def main():
     if args.wandb:
         wandb.config.update({"n_params": n_params})
 
-    # Optimizer & Scheduler
+    # Optimizer & Scheduler (with warmup like original paper)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-8)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=args.lr_min)
+
+    
+    T_max = args.epochs - args.warmup_epochs    #+ 40
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=T_max, eta_min=args.lr_min
+    )
+
+    # Warmup scheduler: linear warmup for first warmup_epochs
+    def warmup_lambda(epoch):
+        if epoch < args.warmup_epochs:
+            return (epoch + 1) / args.warmup_epochs
+        return 1.0
+    warmup_scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=warmup_lambda)
+
+    # Combined: use warmup for first N epochs, then cosine
+    use_warmup = True
 
     start_epoch = 1
     best_psnr = 0
@@ -168,30 +203,52 @@ def main():
         start_epoch = ckpt['epoch'] + 1
         best_psnr = ckpt.get('best_psnr', 0)
         global_step = ckpt.get('global_step', 0)
-        for _ in range(start_epoch - 1):
-            scheduler.step()
+        # Advance schedulers to correct position
+        for e in range(1, start_epoch):
+            if e <= args.warmup_epochs:
+                warmup_scheduler.step()
+            else:
+                cosine_scheduler.step()
         logger.info(f"Resumed from epoch {start_epoch - 1}, best PSNR: {best_psnr:.2f}")
 
     # Loss
     criterion_char = losses.CharbonnierLoss()
     criterion_edge = losses.EdgeLoss() if args.edge_loss else None
 
-    # Data
-    train_dataset = GaussianDenoiseTrainDataset(
-        args.train_dir, patch_size=args.patch_size,
-        sigma=args.sigma, patches_per_image=args.patches_per_image
-    )
+    # Data - select dataset based on mode
+    if args.dataset_mode == 'synthetic':
+        logger.info(f"Dataset mode: SYNTHETIC (sigma={args.sigma})")
+        train_dataset = GaussianDenoiseTrainDataset(
+            args.train_dir, patch_size=args.patch_size,
+            sigma=args.sigma, patches_per_image=args.patches_per_image
+        )
+        val_dataset = GaussianDenoiseTestDataset(
+            args.val_dir, sigma=args.sigma, center_crop=args.val_crop
+        )
+    elif args.dataset_mode == 'sidd':
+        logger.info("Dataset mode: SIDD (native structure with GT_SRGB/NOISY_SRGB pairs)")
+        train_dataset = SIDDTrainDataset(
+            args.train_dir, patch_size=args.patch_size, augment=True
+        )
+        val_dataset = SIDDTestDataset(
+            args.val_dir, center_crop=args.val_crop
+        )
+    else:  # paired
+        logger.info("Dataset mode: PAIRED (input/target directory structure)")
+        train_dataset = PairedDenoiseDataset(
+            args.train_dir, patch_size=args.patch_size, augment=True
+        )
+        val_dataset = PairedDenoiseTestDataset(
+            args.val_dir, center_crop=args.val_crop
+        )
+
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, drop_last=True, pin_memory=True
     )
-
-    val_dataset = GaussianDenoiseTestDataset(
-        args.val_dir, sigma=args.sigma, center_crop=args.val_crop
-    )
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2)
 
-    logger.info(f"Train: {len(train_dataset)} patches | Val: {len(val_dataset)} images")
+    logger.info(f"Train: {len(train_dataset)} samples | Val: {len(val_dataset)} images")
     logger.info(f"Iterations per epoch: {len(train_loader)}")
 
     mixup = utils.MixUp_AUG()
@@ -235,14 +292,22 @@ def main():
 
             # Log to wandb every 10 steps
             if args.wandb and global_step % 10 == 0:
+                lr_now = warmup_scheduler.get_last_lr()[0] if epoch <= args.warmup_epochs else cosine_scheduler.get_last_lr()[0]
                 wandb.log({
                     'train/loss': batch_loss,
-                    'train/lr': scheduler.get_last_lr()[0],
+                    'train/lr': lr_now,
                     'train/epoch': epoch,
                     'train/step': global_step
                 }, step=global_step)
 
-        scheduler.step()
+        # Update learning rate (warmup then cosine)
+        if epoch <= args.warmup_epochs:
+            warmup_scheduler.step()
+            current_lr = warmup_scheduler.get_last_lr()[0]
+        else:
+            cosine_scheduler.step()
+            current_lr = cosine_scheduler.get_last_lr()[0]
+
         avg_loss = epoch_loss / len(train_loader)
         epoch_time = time.time() - t0
 
@@ -250,7 +315,7 @@ def main():
         if args.wandb:
             wandb.log({
                 'epoch/train_loss': avg_loss,
-                'epoch/lr': scheduler.get_last_lr()[0],
+                'epoch/lr': current_lr,
                 'epoch/time': epoch_time
             }, step=global_step)
 
