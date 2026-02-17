@@ -9,15 +9,12 @@ Supports three dataset modes:
 Usage (synthetic noise - DIV2K):
     python train.py --dataset_mode synthetic --train_dir ./Datasets/DIV2K_train_HR --val_dir ./Datasets/DIV2K_valid_HR --sigma 25 --wandb
 
-Usage (SIDD - native structure, no preprocessing needed):
-    python train.py --dataset_mode sidd --train_dir ./Datasets/SIDD_Small_sRGB_Only --val_dir ./Datasets/SIDD_Small_sRGB_Only --wandb
+Usage (SIDD training with DIV2K validation - cross-dataset):
+    python train.py --dataset_mode sidd --train_dir ./Datasets/SIDD_Small_sRGB_Only \
+                    --val_mode synthetic --val_dir ./Datasets/DIV2K_valid_HR --sigma 25 --wandb
 
-    SIDD native structure (handled automatically):
-        SIDD_Small_sRGB_Only/
-            Data/
-                0001_001_S6_.../
-                    GT_SRGB_010.PNG      <- clean
-                    NOISY_SRGB_010.PNG   <- noisy
+    This trains on real SIDD noise but validates on DIV2K with synthetic Gaussian noise,
+    allowing fair comparison with models trained on synthetic noise.
 
 Hyperparameters (matching paper):
     - lr=1e-4, warmup_epochs=3, extended cosine annealing
@@ -74,6 +71,8 @@ def parse_args():
     # Validation
     parser.add_argument('--val_every', type=int, default=5, help='Validate every N epochs (default: 5)')
     parser.add_argument('--val_crop', type=int, default=256, help='Validation center crop size (default: 256)')
+    parser.add_argument('--val_mode', type=str, default=None, choices=['synthetic', 'paired', 'sidd'],
+                        help='Validation dataset mode (default: same as dataset_mode). Use for cross-dataset validation.')
 
     # Model
     parser.add_argument('--n_feat', type=int, default=80, help='Feature channels (default: 80)')
@@ -215,29 +214,38 @@ def main():
     criterion_char = losses.CharbonnierLoss()
     criterion_edge = losses.EdgeLoss() if args.edge_loss else None
 
-    # Data - select dataset based on mode
+    # Training dataset - select based on dataset_mode
     if args.dataset_mode == 'synthetic':
-        logger.info(f"Dataset mode: SYNTHETIC (sigma={args.sigma})")
+        logger.info(f"Train mode: SYNTHETIC (sigma={args.sigma})")
         train_dataset = GaussianDenoiseTrainDataset(
             args.train_dir, patch_size=args.patch_size,
             sigma=args.sigma, patches_per_image=args.patches_per_image
         )
-        val_dataset = GaussianDenoiseTestDataset(
-            args.val_dir, sigma=args.sigma, center_crop=args.val_crop
-        )
     elif args.dataset_mode == 'sidd':
-        logger.info("Dataset mode: SIDD (native structure with GT_SRGB/NOISY_SRGB pairs)")
+        logger.info("Train mode: SIDD (native structure with GT_SRGB/NOISY_SRGB pairs)")
         train_dataset = SIDDTrainDataset(
             args.train_dir, patch_size=args.patch_size, augment=True
         )
+    else:  # paired
+        logger.info("Train mode: PAIRED (input/target directory structure)")
+        train_dataset = PairedDenoiseDataset(
+            args.train_dir, patch_size=args.patch_size, augment=True
+        )
+
+    # Validation dataset - use val_mode if specified, otherwise same as dataset_mode
+    val_mode = args.val_mode if args.val_mode else args.dataset_mode
+    if val_mode == 'synthetic':
+        logger.info(f"Val mode: SYNTHETIC (sigma={args.sigma}) on {args.val_dir}")
+        val_dataset = GaussianDenoiseTestDataset(
+            args.val_dir, sigma=args.sigma, center_crop=args.val_crop
+        )
+    elif val_mode == 'sidd':
+        logger.info(f"Val mode: SIDD on {args.val_dir}")
         val_dataset = SIDDTestDataset(
             args.val_dir, center_crop=args.val_crop
         )
     else:  # paired
-        logger.info("Dataset mode: PAIRED (input/target directory structure)")
-        train_dataset = PairedDenoiseDataset(
-            args.train_dir, patch_size=args.patch_size, augment=True
-        )
+        logger.info(f"Val mode: PAIRED on {args.val_dir}")
         val_dataset = PairedDenoiseTestDataset(
             args.val_dir, center_crop=args.val_crop
         )
