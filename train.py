@@ -9,12 +9,9 @@ Supports three dataset modes:
 Usage (synthetic noise - DIV2K):
     python train.py --dataset_mode synthetic --train_dir ./Datasets/DIV2K_train_HR --val_dir ./Datasets/DIV2K_valid_HR --sigma 25 --wandb
 
-Usage (SIDD training with DIV2K validation - cross-dataset):
+Usage (SIDD with proper train/val split - 140 train, 20 val):
     python train.py --dataset_mode sidd --train_dir ./Datasets/SIDD_Small_sRGB_Only \
-                    --val_mode synthetic --val_dir ./Datasets/DIV2K_valid_HR --sigma 25 --wandb
-
-    This trains on real SIDD noise but validates on DIV2K with synthetic Gaussian noise,
-    allowing fair comparison with models trained on synthetic noise.
+                    --val_dir ./Datasets/SIDD_Small_sRGB_Only --sidd_split --wandb --name dgunet_sidd
 
 Hyperparameters (matching paper):
     - lr=1e-4, warmup_epochs=3, extended cosine annealing
@@ -39,6 +36,7 @@ from tqdm import tqdm
 from skimage.metrics import structural_similarity as compare_ssim
 
 from DGUNet import DGUNet
+from DGUNet_denoise import DGUNet_Denoise
 from dataset_denoise import (
     GaussianDenoiseTrainDataset, GaussianDenoiseTestDataset,
     PairedDenoiseDataset, PairedDenoiseTestDataset,
@@ -57,11 +55,13 @@ def parse_args():
     parser.add_argument('--train_dir', type=str, required=True, help='Path to training data')
     parser.add_argument('--val_dir', type=str, required=True, help='Path to validation data')
     parser.add_argument('--sigma', type=int, default=25, help='Noise level for synthetic mode (default: 25)')
+    parser.add_argument('--sidd_split', action='store_true',
+                        help='For SIDD mode: split into 140 train / 20 val (uses same dir for both)')
 
     # Training
     parser.add_argument('--batch_size', type=int, default=4, help='Batch size (default: 2)')
     parser.add_argument('--patch_size', type=int, default=128, help='Training patch size (default: 128)')
-    parser.add_argument('--accum_steps', type=int, default=1, help='Gradient accumulation steps (default: 2)')
+    parser.add_argument('--accum_steps', type=int, default=2, help='Gradient accumulation steps (default: 2)')
     parser.add_argument('--patches_per_image', type=int, default=1, help='Patches per image per epoch (default: 1)')
     parser.add_argument('--epochs', type=int, default=80, help='Number of epochs (default: 80)')
     parser.add_argument('--lr', type=float, default=2e-4, help='Learning rate (default: 1e-4, same as paper)')
@@ -77,6 +77,8 @@ def parse_args():
     # Model
     parser.add_argument('--n_feat', type=int, default=80, help='Feature channels (default: 80)')
     parser.add_argument('--depth', type=int, default=5, help='Unfolding depth (default: 5, gives 7 stages)')
+    parser.add_argument('--known_gradient', action='store_true',
+                        help='Use analytical gradient (x-y) instead of learned phi/phiT. Only for denoising (H=I).')
 
     # Loss
     parser.add_argument('--edge_loss', action='store_true', help='Use edge loss')
@@ -161,7 +163,13 @@ def main():
         logger.info("Wandb logging enabled")
 
     # Model
-    model = DGUNet(n_feat=args.n_feat, scale_unetfeats=48, depth=args.depth).to(device)
+    if args.known_gradient:
+        logger.info("Using DGUNet_Denoise with KNOWN gradient (H=I, analytical)")
+        model = DGUNet_Denoise(n_feat=args.n_feat, scale_unetfeats=48, depth=args.depth,
+                               known_gradient=True).to(device)
+    else:
+        logger.info("Using DGUNet with LEARNED gradient (phi/phiT ResBlocks)")
+        model = DGUNet(n_feat=args.n_feat, scale_unetfeats=48, depth=args.depth).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Parameters: {n_params:,}")
 
@@ -222,9 +230,10 @@ def main():
             sigma=args.sigma, patches_per_image=args.patches_per_image
         )
     elif args.dataset_mode == 'sidd':
-        logger.info("Train mode: SIDD (native structure with GT_SRGB/NOISY_SRGB pairs)")
+        split_train = 'train' if args.sidd_split else None
+        logger.info(f"Train mode: SIDD (split={split_train}, {140 if args.sidd_split else 160} scenes)")
         train_dataset = SIDDTrainDataset(
-            args.train_dir, patch_size=args.patch_size, augment=True
+            args.train_dir, patch_size=args.patch_size, augment=True, split=split_train
         )
     else:  # paired
         logger.info("Train mode: PAIRED (input/target directory structure)")
@@ -240,9 +249,10 @@ def main():
             args.val_dir, sigma=args.sigma, center_crop=args.val_crop
         )
     elif val_mode == 'sidd':
-        logger.info(f"Val mode: SIDD on {args.val_dir}")
+        split_val = 'val' if args.sidd_split else None
+        logger.info(f"Val mode: SIDD (split={split_val}, {20 if args.sidd_split else 160} scenes)")
         val_dataset = SIDDTestDataset(
-            args.val_dir, center_crop=args.val_crop
+            args.val_dir, center_crop=args.val_crop, split=split_val
         )
     else:  # paired
         logger.info(f"Val mode: PAIRED on {args.val_dir}")

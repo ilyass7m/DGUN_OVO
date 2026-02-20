@@ -270,19 +270,30 @@ class SIDDTrainDataset(Dataset):
         sidd_dir: Path to SIDD root (containing 'Data' folder)
         patch_size: Size of random crops (default 128)
         augment: Enable data augmentation
+        split: 'train', 'val', or None (use all). Train uses first 140, val uses last 20.
     """
-    def __init__(self, sidd_dir, patch_size=128, augment=True):
+    def __init__(self, sidd_dir, patch_size=128, augment=True, split=None):
         super().__init__()
         data_dir = os.path.join(sidd_dir, 'Data')
+
+        # Get all scene folders
+        all_scenes = sorted([d for d in os.listdir(data_dir)
+                            if os.path.isdir(os.path.join(data_dir, d))])
+
+        # Split: 140 train, 20 val (out of 160 total)
+        if split == 'train':
+            scenes = all_scenes[:140]
+        elif split == 'val':
+            scenes = all_scenes[140:]
+        else:
+            scenes = all_scenes
 
         self.noisy_paths = []
         self.clean_paths = []
 
-        # Scan all scene folders
-        for scene_folder in sorted(os.listdir(data_dir)):
+        # Scan selected scene folders
+        for scene_folder in scenes:
             scene_path = os.path.join(data_dir, scene_folder)
-            if not os.path.isdir(scene_path):
-                continue
 
             # Find GT and NOISY images in this scene
             for f in os.listdir(scene_path):
@@ -351,19 +362,34 @@ class SIDDTrainDataset(Dataset):
 class SIDDTestDataset(Dataset):
     """
     Loads SIDD test/validation set in native structure.
+
+    Args:
+        sidd_dir: Path to SIDD root (containing 'Data' folder)
+        center_crop: Optional center crop size for memory efficiency
+        split: 'train', 'val', or None (use all). Train uses first 140, val uses last 20.
     """
-    def __init__(self, sidd_dir, center_crop=None):
+    def __init__(self, sidd_dir, center_crop=None, split=None):
         super().__init__()
         data_dir = os.path.join(sidd_dir, 'Data')
+
+        # Get all scene folders
+        all_scenes = sorted([d for d in os.listdir(data_dir)
+                            if os.path.isdir(os.path.join(data_dir, d))])
+
+        # Split: 140 train, 20 val (out of 160 total)
+        if split == 'train':
+            scenes = all_scenes[:140]
+        elif split == 'val':
+            scenes = all_scenes[140:]
+        else:
+            scenes = all_scenes
 
         self.noisy_paths = []
         self.clean_paths = []
         self.scene_names = []
 
-        for scene_folder in sorted(os.listdir(data_dir)):
+        for scene_folder in scenes:
             scene_path = os.path.join(data_dir, scene_folder)
-            if not os.path.isdir(scene_path):
-                continue
 
             for f in os.listdir(scene_path):
                 if f.startswith('GT_SRGB') and f.endswith('.PNG'):
