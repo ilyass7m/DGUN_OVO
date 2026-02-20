@@ -13,9 +13,17 @@ Usage (SIDD with proper train/val split - 140 train, 20 val):
     python train.py --dataset_mode sidd --train_dir ./Datasets/SIDD_Small_sRGB_Only \
                     --val_dir ./Datasets/SIDD_Small_sRGB_Only --sidd_split --wandb --name dgunet_sidd
 
+Usage (fast training with AMP - recommended for 12GB VRAM):
+    python train.py --dataset_mode synthetic --train_dir ./Datasets/DIV2K_train_HR \
+                    --val_dir ./Datasets/DIV2K_valid_HR --sigma 25 --amp --batch_size 16 --wandb
+
 Hyperparameters (matching paper):
     - lr=1e-4, warmup_epochs=3, extended cosine annealing
     - batch_size=2, accum_steps=2 -> effective batch=4 (paper uses 16)
+
+Performance options:
+    --amp       Enable automatic mixed precision (2-3x speedup, ~40% less VRAM)
+    --compile   Use torch.compile() for PyTorch 2.0+ (10-30% speedup)
 """
 
 import os
@@ -32,6 +40,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 from skimage.metrics import structural_similarity as compare_ssim
 
@@ -99,6 +108,10 @@ def parse_args():
     parser.add_argument('--gpu', type=str, default='0', help='GPU id')
     parser.add_argument('--workers', type=int, default=6, help='DataLoader workers')
     parser.add_argument('--seed', type=int, default=1234, help='Random seed')
+
+    # Performance optimizations
+    parser.add_argument('--amp', action='store_true', help='Enable automatic mixed precision (AMP) for faster training')
+    parser.add_argument('--compile', action='store_true', help='Use torch.compile() for PyTorch 2.0+ speedup')
 
     return parser.parse_args()
 
@@ -170,8 +183,20 @@ def main():
     else:
         logger.info("Using DGUNet with LEARNED gradient (phi/phiT ResBlocks)")
         model = DGUNet(n_feat=args.n_feat, scale_unetfeats=48, depth=args.depth).to(device)
+
+    # torch.compile for PyTorch 2.0+ speedup
+    if args.compile:
+        logger.info("Compiling model with torch.compile()...")
+        model = torch.compile(model, mode="reduce-overhead")
+        logger.info("Model compiled successfully")
+
     n_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Parameters: {n_params:,}")
+
+    # AMP scaler for mixed precision training
+    scaler = GradScaler(enabled=args.amp)
+    if args.amp:
+        logger.info("Automatic Mixed Precision (AMP) enabled")
 
     if args.wandb:
         wandb.config.update({"n_params": n_params})
@@ -262,9 +287,14 @@ def main():
 
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, drop_last=True, pin_memory=True
+        num_workers=args.workers, drop_last=True, pin_memory=True,
+        persistent_workers=True if args.workers > 0 else False,
+        prefetch_factor=3 if args.workers > 0 else None
     )
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2)
+    val_loader = DataLoader(
+        val_dataset, batch_size=1, shuffle=False, num_workers=2,
+        pin_memory=True, persistent_workers=True
+    )
 
     logger.info(f"Train: {len(train_dataset)} samples | Val: {len(val_dataset)} images")
     logger.info(f"Iterations per epoch: {len(train_loader)}")
@@ -279,25 +309,31 @@ def main():
 
         pbar = tqdm(train_loader, desc=f'Epoch {epoch}/{args.epochs}')
         for batch_idx, (clean, noisy) in enumerate(pbar):
-            clean, noisy = clean.to(device), noisy.to(device)
+            # Non-blocking transfers for better GPU utilization
+            clean = clean.to(device, non_blocking=True)
+            noisy = noisy.to(device, non_blocking=True)
 
             if epoch > 5:
                 clean, noisy = mixup.aug(clean, noisy)
 
-            restored = model(noisy)
-            loss = sum(criterion_char(torch.clamp(s, 0, 1), clean) for s in restored)
-            if criterion_edge:
-                loss += args.edge_weight * sum(criterion_edge(torch.clamp(s, 0, 1), clean) for s in restored)
+            # Forward pass with automatic mixed precision
+            with autocast(enabled=args.amp):
+                restored = model(noisy)
+                loss = sum(criterion_char(torch.clamp(s, 0, 1), clean) for s in restored)
+                if criterion_edge:
+                    loss += args.edge_weight * sum(criterion_edge(torch.clamp(s, 0, 1), clean) for s in restored)
 
             # Normalize loss for gradient accumulation
             loss = loss / args.accum_steps
-            loss.backward()
+
+            # Backward pass with gradient scaling for AMP
+            scaler.scale(loss).backward()
 
             # Gradient accumulation: only step every accum_steps
             if (batch_idx + 1) % args.accum_steps == 0:
-                optimizer.step()
-                for p in model.parameters():
-                    p.grad = None
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)  # Faster than manual p.grad = None
                 # Periodically clear cache to prevent fragmentation
                 if (batch_idx + 1) % 50 == 0:
                     torch.cuda.empty_cache()
@@ -346,8 +382,10 @@ def main():
 
             with torch.no_grad():
                 for clean, noisy, fname in val_loader:
-                    clean, noisy = clean.to(device), noisy.to(device)
-                    restored = torch.clamp(model(noisy)[0], 0, 1)
+                    clean = clean.to(device, non_blocking=True)
+                    noisy = noisy.to(device, non_blocking=True)
+                    with autocast(enabled=args.amp):
+                        restored = torch.clamp(model(noisy)[0], 0, 1)
 
                     for r, t in zip(restored, clean):
                         # PSNR
