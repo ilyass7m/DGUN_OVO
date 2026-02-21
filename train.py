@@ -24,6 +24,14 @@ Hyperparameters (matching paper):
 Performance options:
     --amp       Enable automatic mixed precision (2-3x speedup, ~40% less VRAM)
     --compile   Use torch.compile() for PyTorch 2.0+ (10-30% speedup)
+
+Ablation studies:
+    --no_isff           Disable Inter-Stage Feature Fusion (ISFF) module
+    --known_gradient    Use analytical gradient instead of learned phi/phiT
+
+Example (ISFF ablation):
+    python train.py --dataset_mode synthetic --train_dir ./Datasets/DIV2K_train_HR \
+                    --val_dir ./Datasets/DIV2K_valid_HR --sigma 25 --no_isff --name dgunet_no_isff --wandb
 """
 
 import os
@@ -46,6 +54,7 @@ from skimage.metrics import structural_similarity as compare_ssim
 
 from DGUNet import DGUNet
 from DGUNet_denoise import DGUNet_Denoise
+from DGUNet_ablation import DGUNet_Ablation
 from dataset_denoise import (
     GaussianDenoiseTrainDataset, GaussianDenoiseTestDataset,
     PairedDenoiseDataset, PairedDenoiseTestDataset,
@@ -88,6 +97,8 @@ def parse_args():
     parser.add_argument('--depth', type=int, default=5, help='Unfolding depth (default: 5, gives 7 stages)')
     parser.add_argument('--known_gradient', action='store_true',
                         help='Use analytical gradient (x-y) instead of learned phi/phiT. Only for denoising (H=I).')
+    parser.add_argument('--no_isff', action='store_true',
+                        help='Disable Inter-Stage Feature Fusion (ISFF) for ablation study')
 
     # Loss
     parser.add_argument('--edge_loss', action='store_true', help='Use edge loss')
@@ -180,6 +191,10 @@ def main():
         logger.info("Using DGUNet_Denoise with KNOWN gradient (H=I, analytical)")
         model = DGUNet_Denoise(n_feat=args.n_feat, scale_unetfeats=48, depth=args.depth,
                                known_gradient=True).to(device)
+    elif args.no_isff:
+        logger.info("Using DGUNet WITHOUT Inter-Stage Feature Fusion (ISFF ablation)")
+        model = DGUNet_Ablation(n_feat=args.n_feat, scale_unetfeats=48, depth=args.depth,
+                                use_isff=False).to(device)
     else:
         logger.info("Using DGUNet with LEARNED gradient (phi/phiT ResBlocks)")
         model = DGUNet(n_feat=args.n_feat, scale_unetfeats=48, depth=args.depth).to(device)
