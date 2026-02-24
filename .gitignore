@@ -1,20 +1,66 @@
-#Data
+# =============================================================================
+# DATA FILES (exclude actual images, keep structure)
+# =============================================================================
+# Image files
 *.png
 *.jpg
-*.PNG 
-*.txt
+*.jpeg
+*.PNG
+*.JPG
+*.JPEG
+*.bmp
+*.tiff
 
-#Report
-*.tex
-# Checkpoints et logs
-**/checkpoints/
-**/wandb/
+# But keep .gitkeep files to preserve directory structure
+!.gitkeep
+
+# =============================================================================
+# CHECKPOINTS & LOGS
+# =============================================================================
+# Model weights (large files - download from Google Drive)
+checkpoints/**/*.pth
+checkpoints/**/*.pt
+checkpoints/**/wandb/
+
+# Wandb logs
+wandb/
 *.log
 
-# Fichiers notebook
+# =============================================================================
+# REPORT FILES
+# =============================================================================
+# LaTeX build artifacts (keep .tex source)
+report/*.aux
+report/*.log
+report/*.out
+report/*.pdf
+report/*.synctex.gz
+report/*.fls
+report/*.fdb_latexmk
+report/*.bbl
+report/*.blg
+
+# =============================================================================
+# JUPYTER & PYTHON
+# =============================================================================
 *.ipynb_checkpoints/
 .ipynb_checkpoints/
+__pycache__/
+*.pyc
+*.pyo
 
-# Fichiers locaux
+# =============================================================================
+# IDE & LOCAL
+# =============================================================================
 .claude/
 *.local.json
+.vscode/
+.idea/
+
+# =============================================================================
+# MISC
+# =============================================================================
+*.txt
+!requirements.txt
+!**/Scene_Instances.txt
+!**/_ReadMe.txt

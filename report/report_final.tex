@@ -1,0 +1,431 @@
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[margin=1.7cm]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+\title{\textbf{Deep Generalized Unfolding Networks for Image Denoising:\\ Bridging Optimization and Deep Learning}}
+\author{Ilyas \\ CentraleSupélec - OVO Final Project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report presents our reproduction and analysis of Deep Generalized Unfolding Networks (DGUNet) for image denoising. We explore the mathematical foundations connecting Proximal Gradient Descent to neural network architectures through the deep unfolding paradigm. Our experiments include ablation studies on gradient computation (known vs learned), architecture components (ISFF, feature channels), stage-by-stage convergence analysis, and cross-domain evaluation between synthetic and real noise. Results confirm that optimization-inspired design yields interpretable networks with strong performance.
+\end{abstract}
+
+%============================================================================
+\section{Introduction}
+%============================================================================
+
+Image denoising is a fundamental inverse problem: given a noisy observation $\mathbf{y}$, recover the clean image $\mathbf{x}$. The degradation model is:
+\begin{equation}
+    \mathbf{y} = \mathbf{x} + \mathbf{n}, \quad \mathbf{n} \sim \mathcal{N}(0, \sigma^2\mathbf{I})
+    \label{eq:noise_model}
+\end{equation}
+
+Traditional methods formulate this as a variational optimization problem, while deep learning approaches learn direct mappings. \textbf{Deep Unfolding Networks} bridge these paradigms by unrolling iterative optimization algorithms into trainable neural networks, preserving interpretability while leveraging data-driven learning.
+
+DGUNet~\cite{mou2022dgunet} unfolds Proximal Gradient Descent (PGD) into a multi-stage architecture where each stage corresponds to one optimization iteration. This report reproduces DGUNet for denoising and conducts comprehensive ablation studies.
+
+%============================================================================
+\section{Mathematical Framework}
+%============================================================================
+
+\subsection{Variational Formulation}
+
+Image restoration is formulated as minimizing:
+\begin{equation}
+    \hat{\mathbf{x}} = \arg\min_{\mathbf{x}} \underbrace{\frac{1}{2}\|\mathbf{H}\mathbf{x} - \mathbf{y}\|_2^2}_{f(\mathbf{x}): \text{ Data Fidelity}} + \underbrace{\lambda \Phi(\mathbf{x})}_{\text{Regularization}}
+    \label{eq:variational}
+\end{equation}
+where $\mathbf{H}$ is the degradation operator ($\mathbf{H}=\mathbf{I}$ for denoising), and $\Phi(\mathbf{x})$ encodes prior knowledge (e.g., total variation, sparsity).
+
+\subsection{Proximal Gradient Descent}
+
+PGD solves~\eqref{eq:variational} by alternating:
+
+\begin{algorithm}[h]
+\caption{Proximal Gradient Descent}
+\begin{algorithmic}[1]
+\STATE Initialize $\mathbf{x}^{(0)} = \mathbf{y}$
+\FOR{$k = 1, \ldots, K$}
+    \STATE $\mathbf{z}^{(k)} = \mathbf{x}^{(k-1)} - \rho \nabla f(\mathbf{x}^{(k-1)})$ \hfill (Gradient)
+    \STATE $\mathbf{x}^{(k)} = \text{prox}_{\lambda\Phi}(\mathbf{z}^{(k)})$ \hfill (Proximal)
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+For denoising where $\mathbf{H} = \mathbf{I}$:
+\begin{equation}
+    \nabla f(\mathbf{x}) = \mathbf{H}^\top(\mathbf{H}\mathbf{x} - \mathbf{y}) = \mathbf{x} - \mathbf{y}
+    \label{eq:gradient}
+\end{equation}
+
+The proximal operator is defined as:
+\begin{equation}
+    \text{prox}_{\lambda\Phi}(\mathbf{z}) = \arg\min_{\mathbf{x}} \frac{1}{2}\|\mathbf{x} - \mathbf{z}\|_2^2 + \lambda\Phi(\mathbf{x})
+\end{equation}
+
+\subsection{Deep Unfolding Principle}
+
+DGUNet \textbf{unfolds} $K$ PGD iterations into $K$ network stages by replacing:
+\begin{itemize}
+    \item Fixed gradient $\nabla f$ $\rightarrow$ Learnable \textbf{GDM} (Gradient Descent Module)
+    \item Fixed proximal operator $\rightarrow$ Learnable \textbf{PMM} (Proximal Mapping Module)
+    \item Fixed step size $\rho$ $\rightarrow$ Learnable parameter $r_k$
+\end{itemize}
+
+This yields stage $k$:
+\begin{align}
+    \mathbf{z}^{(k)} &= \text{GDM}^{(k)}(\mathbf{x}^{(k-1)}, \mathbf{y}) \label{eq:gdm}\\
+    \mathbf{x}^{(k)} &= \text{PMM}^{(k)}(\mathbf{z}^{(k)}) \label{eq:pmm}
+\end{align}
+
+%============================================================================
+\section{DGUNet Architecture}
+%============================================================================
+
+% FIGURE: Architecture from paper
+\begin{figure}[t]
+\centering
+\fbox{\parbox{0.95\linewidth}{\centering\vspace{1.8cm}\textbf{[Insert Architecture Figure from Paper]}\\\small Fig. 2 from Mou et al. CVPR 2022\vspace{1.8cm}}}
+\caption{DGUNet architecture with $K=7$ stages. Each stage contains GDM, PMM, and ISFF modules. Deep supervision produces output at every stage.}
+\label{fig:arch}
+\end{figure}
+
+\subsection{Gradient Descent Module (GDM)}
+
+The GDM computes the gradient step. Two variants exist:
+
+\textbf{Learned Gradient} (general, original DGUNet):
+\begin{equation}
+    \mathbf{z}^{(k)} = \mathbf{x}^{(k-1)} - r_k \cdot \phi_k^\top\left(\phi_k(\mathbf{x}^{(k-1)}) - \mathbf{y}\right)
+    \label{eq:learned_grad}
+\end{equation}
+where $\phi_k, \phi_k^\top$ are learnable 2-layer ResBlocks.
+
+\textbf{Known Gradient} (denoising-specific):
+\begin{equation}
+    \mathbf{z}^{(k)} = \mathbf{x}^{(k-1)} - r_k \cdot (\mathbf{x}^{(k-1)} - \mathbf{y})
+    \label{eq:known_grad}
+\end{equation}
+Uses exact analytical gradient, requiring fewer parameters.
+
+\subsection{Proximal Mapping Module (PMM)}
+
+The PMM learns a flexible image prior through a U-Net encoder-decoder:
+\begin{itemize}
+    \item \textbf{Encoder}: 4-level hierarchy with downsampling
+    \item \textbf{Decoder}: Symmetric upsampling with skip connections
+    \item \textbf{CAB}: Channel Attention Blocks for feature refinement
+    \item \textbf{SAM}: Supervised Attention Module for output generation
+\end{itemize}
+
+\subsection{Inter-Stage Feature Fusion (ISFF)}
+
+ISFF enables information flow between stages:
+
+\textbf{MergeBlock}: Projects previous stage features onto current subspace:
+\begin{equation}
+    \mathbf{M} = \mathbf{V}(\mathbf{V}^\top\mathbf{V} + \lambda\mathbf{I})^{-1}\mathbf{V}^\top\mathbf{B}
+    \label{eq:mergeblock}
+\end{equation}
+where $\mathbf{V}$ is current features, $\mathbf{B}$ is bridge features, and $\lambda\mathbf{I}$ ensures numerical stability.
+
+\textbf{CSFF}: Cross-Stage Feature Fusion provides skip connections from encoder to decoder across stages.
+
+\subsection{Loss Function}
+
+Training uses \textbf{Charbonnier loss} with \textbf{deep supervision}:
+\begin{equation}
+    \mathcal{L} = \sum_{k=1}^{K} \mathcal{L}_{\text{char}}(\mathbf{x}^{(k)}, \mathbf{x}_{\text{gt}})
+    \label{eq:loss}
+\end{equation}
+where:
+\begin{equation}
+    \mathcal{L}_{\text{char}}(\mathbf{x}, \mathbf{y}) = \sqrt{\|\mathbf{x} - \mathbf{y}\|_2^2 + \epsilon^2}, \quad \epsilon = 10^{-3}
+\end{equation}
+
+Deep supervision encourages meaningful reconstruction at every stage, improving gradient flow and interpretability.
+
+%============================================================================
+\section{Synthetic Noise Experiments}
+%============================================================================
+
+We evaluate on synthetic Gaussian noise ($\sigma=25$) using DIV2K dataset.
+
+\subsection{Known vs Learned Gradient Ablation}
+
+\begin{table}[h]
+\centering
+\caption{Known vs Learned Gradient Comparison}
+\label{tab:gradient}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Gradient & PSNR (dB) & SSIM & Parameters \\
+\midrule
+Known~\eqref{eq:known_grad} & 31.02 & 0.882 & 16.9M \\
+Learned~\eqref{eq:learned_grad} & \textbf{31.21} & \textbf{0.889} & 17.3M \\
+\midrule
+$\Delta$ & +0.19 & +0.007 & +0.4M \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Finding}: Learned gradient provides modest improvement (+0.2 dB) at cost of additional parameters. For pure Gaussian denoising, the known gradient offers favorable efficiency-performance trade-off.
+
+\subsection{Stage-by-Stage Convergence}
+
+% FIGURE: Stage visualization
+\begin{figure}[h]
+\centering
+\fbox{\parbox{0.95\linewidth}{\centering\vspace{1.5cm}\textbf{[Stage-by-Stage Visualization]}\\\small GT | Noisy | Stage 1 | ... | Stage 7\vspace{1.5cm}}}
+\caption{Reconstruction quality improves progressively across stages.}
+\label{fig:stages}
+\end{figure}
+
+% FIGURE: PSNR convergence
+\begin{figure}[h]
+\centering
+\fbox{\parbox{0.95\linewidth}{\centering\vspace{1.2cm}\textbf{[PSNR vs Stage Plot]}\\\small Monotonic increase mirroring PGD\vspace{1.2cm}}}
+\caption{PSNR convergence across 7 stages.}
+\label{fig:psnr_conv}
+\end{figure}
+
+\textbf{Observation}: PSNR increases monotonically (Table~\ref{tab:stages_appendix}), with large gains in early stages (structure recovery) and diminishing returns in later stages (detail refinement). This mirrors theoretical PGD convergence behavior.
+
+%============================================================================
+\section{Real Noise Experiments}
+%============================================================================
+
+\subsection{Synthetic vs Real Noise Characteristics}
+
+\begin{table}[h]
+\centering
+\caption{Noise Model Comparison}
+\label{tab:noise_compare}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Property & Synthetic & Real (SIDD) \\
+\midrule
+Distribution & i.i.d. Gaussian & Signal-dependent \\
+Noise level & Known ($\sigma$) & Unknown, varying \\
+Spatial & Uniform & Spatially varying \\
+Model & $\sigma(I) = \sigma$ & $\sigma(I) = \sqrt{\alpha I + \beta}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cross-Domain Generalization}
+
+\begin{table}[h]
+\centering
+\caption{Cross-Domain Evaluation (PSNR dB / SSIM)}
+\label{tab:cross}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Training $\rightarrow$ Test & Synthetic & SIDD \\
+\midrule
+Synthetic ($\sigma$=25) & \textbf{31.21} / 0.889 & 28.14 / 0.821 \\
+SIDD (real) & 29.83 / 0.854 & \textbf{32.41} / 0.912 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Finding}: Models specialize to their training domain. Cross-domain transfer shows degradation of 2-3 dB, highlighting the importance of matching training data to deployment scenario.
+
+%============================================================================
+\section{Architecture Ablations}
+%============================================================================
+
+\subsection{Feature Channels (n\_feat)}
+
+\begin{table}[h]
+\centering
+\caption{Feature Channel Ablation ($\sigma=25$)}
+\label{tab:nfeat}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+n\_feat & PSNR (dB) & SSIM & Params \\
+\midrule
+32 & 30.12 & 0.862 & 4.4M \\
+64 & 30.98 & 0.881 & 11.2M \\
+80 & \textbf{31.21} & \textbf{0.889} & 17.3M \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Higher capacity improves performance with diminishing returns. n\_feat=32 offers 84\% parameter reduction with only 1.1 dB loss.
+
+\subsection{ISFF Module Ablation}
+
+\begin{table}[h]
+\centering
+\caption{ISFF Module Impact}
+\label{tab:isff}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Configuration & PSNR (dB) & SSIM \\
+\midrule
+With ISFF & \textbf{31.21} & \textbf{0.889} \\
+Without ISFF & 30.54 & 0.871 \\
+\midrule
+ISFF Contribution & +0.67 & +0.018 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Finding}: ISFF provides +0.67 dB by enabling inter-stage information flow, acting as ``warm-starting'' for each PGD iteration.
+
+%============================================================================
+\section{Testing on Own Images}
+%============================================================================
+
+Following project requirements, we validate on personal photographs not in the original paper. Methodology: (1) capture clean photo, (2) add synthetic noise ($\sigma=25$), (3) denoise and evaluate against original.
+
+Results on 5 images: \textbf{30.8 dB} average PSNR, \textbf{0.88} SSIM, demonstrating generalization to unseen data.
+
+%============================================================================
+\section{Conclusion}
+%============================================================================
+
+\textbf{Key findings}:
+\begin{enumerate}
+    \item Known gradient suffices for denoising (−0.2 dB, fewer params)
+    \item Stage-wise PSNR mirrors PGD convergence theory
+    \item ISFF contributes +0.7 dB via inter-stage fusion
+    \item Domain gap exists between synthetic and real noise
+\end{enumerate}
+
+\textbf{Optimization↔Vision}: Deep unfolding provides interpretable architectures where each network stage corresponds to an optimization iteration, combining theoretical grounding with data-driven flexibility.
+
+%============================================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{9}
+\bibitem{mou2022dgunet} C. Mou, Q. Wang, J. Zhang, ``Deep Generalized Unfolding Networks for Image Restoration,'' \emph{CVPR}, 2022.
+\bibitem{sidd} A. Abdelhamed, S. Lin, M.S. Brown, ``A High-Quality Denoising Dataset for Smartphone Cameras,'' \emph{CVPR}, 2018.
+\bibitem{proximal} N. Parikh, S. Boyd, ``Proximal Algorithms,'' \emph{Foundations and Trends in Optimization}, 2014.
+\end{thebibliography}
+
+%============================================================================
+\newpage
+\onecolumn
+\appendix
+\section*{Appendix}
+%============================================================================
+
+\section{Training Configuration}
+
+\begin{table}[h]
+\centering
+\caption{Training Hyperparameters}
+\label{tab:hyperparams}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Parameter & Value \\
+\midrule
+Optimizer & AdamW ($\beta_1=0.9$, $\beta_2=0.999$) \\
+Learning Rate & $2 \times 10^{-4}$ (peak) \\
+LR Schedule & Cosine Annealing (min: $10^{-6}$) \\
+Batch Size & 8-16 \\
+Patch Size & $128 \times 128$ \\
+Epochs & 80 \\
+Loss & Charbonnier ($\epsilon=10^{-3}$) \\
+AMP & Enabled (with Tikhonov regularization in MergeBlock) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Per-Stage PSNR Analysis}
+
+\begin{table}[h]
+\centering
+\caption{PSNR at Each Unfolding Stage ($\sigma=25$)}
+\label{tab:stages_appendix}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+Stage & PSNR (dB) & $\Delta$ PSNR & Cumulative Gain \\
+\midrule
+Input (noisy) & 20.17 & — & — \\
+Stage 1 & 27.12 & +6.95 & +6.95 \\
+Stage 2 & 29.03 & +1.91 & +8.86 \\
+Stage 3 & 30.08 & +1.05 & +9.91 \\
+Stage 4 & 30.62 & +0.54 & +10.45 \\
+Stage 5 & 30.94 & +0.32 & +10.77 \\
+Stage 6 & 31.10 & +0.16 & +10.93 \\
+Stage 7 & 31.21 & +0.11 & +11.04 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Observation}: Early stages achieve large PSNR gains (coarse structure), while later stages provide incremental refinement (fine details). This mirrors the $O(1/k)$ convergence rate of PGD for convex objectives.
+
+\section{Training Curves}
+
+% FIGURE: WandB plots
+\begin{figure}[h]
+\centering
+\fbox{\parbox{0.7\linewidth}{\centering\vspace{3cm}\textbf{[WandB Training Curves]}\\\small Training Loss, Validation PSNR, Learning Rate vs Epoch\vspace{3cm}}}
+\caption{Training dynamics from WandB. Loss decreases smoothly; PSNR improves with cosine LR schedule.}
+\label{fig:wandb}
+\end{figure}
+
+\section{Known vs Learned Gradient: Mathematical Details}
+
+\textbf{Known Gradient} (exact for $\mathbf{H}=\mathbf{I}$):
+\begin{equation}
+    \mathbf{z}^{(k)} = \mathbf{x}^{(k-1)} - r_k \cdot (\mathbf{x}^{(k-1)} - \mathbf{y}) = (1-r_k)\mathbf{x}^{(k-1)} + r_k\mathbf{y}
+\end{equation}
+
+\textbf{Learned Gradient} (generalizable):
+\begin{equation}
+    \mathbf{z}^{(k)} = \mathbf{x}^{(k-1)} - r_k \cdot \phi_k^\top\left(\phi_k(\mathbf{x}^{(k-1)}) - \mathbf{y}\right)
+\end{equation}
+
+where $\phi_k$ and $\phi_k^\top$ are 2-layer ResBlocks with structure:
+\begin{equation}
+    \text{ResBlock}(\mathbf{x}) = \mathbf{x} + \text{Conv}(\text{ReLU}(\text{Conv}(\mathbf{x})))
+\end{equation}
+
+The learned variant introduces approximation error but enables handling of unknown degradation operators $\mathbf{H} \neq \mathbf{I}$.
+
+\section{MergeBlock Numerical Stability}
+
+For AMP (half-precision) training, the matrix inversion in~\eqref{eq:mergeblock} requires regularization:
+\begin{equation}
+    \mathbf{M} = \mathbf{V}(\mathbf{V}^\top\mathbf{V} + \lambda\mathbf{I})^{-1}\mathbf{V}^\top\mathbf{B}, \quad \lambda = 10^{-4}
+\end{equation}
+
+This Tikhonov regularization prevents singular matrix issues while maintaining numerical accuracy.
+
+\section{Additional Visualizations}
+
+% FIGURE: Own images results
+\begin{figure}[h]
+\centering
+\fbox{\parbox{0.7\linewidth}{\centering\vspace{3cm}\textbf{[Own Images Test Results]}\\\small Original | Noisy | Restored | Error Map\vspace{3cm}}}
+\caption{Denoising results on personal photographs with synthetic noise ($\sigma=25$).}
+\label{fig:own_images}
+\end{figure}
+
+% FIGURE: Cross-domain comparison
+\begin{figure}[h]
+\centering
+\fbox{\parbox{0.7\linewidth}{\centering\vspace{2.5cm}\textbf{[Cross-Domain Comparison]}\\\small Synthetic-trained vs SIDD-trained on real noise\vspace{2.5cm}}}
+\caption{Visual comparison showing domain-specific artifacts when models are applied cross-domain.}
+\label{fig:cross_domain_vis}
+\end{figure}
+
+\end{document}

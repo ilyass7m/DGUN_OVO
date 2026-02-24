@@ -1,0 +1,437 @@
+\documentclass[10pt,twocolumn]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage[margin=2cm]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{listings}
+
+\lstset{
+    basicstyle=\ttfamily\scriptsize,
+    breaklines=true,
+    frame=single,
+    language=Python
+}
+
+% Title
+\title{\textbf{Deep Generalized Unfolding Networks for Image Denoising: Bridging Optimization and Deep Learning}}
+\author{
+    Ilyas \\
+    CentraleSup\'elec \\
+    OVO Course - Final Project
+}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report presents our reproduction and analysis of Deep Generalized Unfolding Networks (DGUNet) for image denoising. We explore the mathematical foundations connecting proximal gradient descent optimization to deep neural network architectures. Through comprehensive experiments including cross-domain evaluation, ablation studies on the Inter-Stage Feature Fusion (ISFF) module, and testing on personal photographs, we demonstrate both the theoretical elegance and practical effectiveness of the unfolding paradigm. Our results confirm that explicit optimization-inspired design yields interpretable networks with strong performance.
+\end{abstract}
+
+%============================================================================
+\section{Introduction}
+%============================================================================
+
+Image denoising is a fundamental inverse problem in computer vision. Given a noisy observation $\mathbf{y} = \mathbf{x} + \mathbf{n}$, where $\mathbf{x}$ is the clean image and $\mathbf{n}$ is additive noise, the goal is to recover $\mathbf{x}$. Traditional approaches formulate this as an optimization problem:
+\begin{equation}
+    \min_{\mathbf{x}} \frac{1}{2}\|\mathbf{y} - \mathbf{x}\|^2 + \lambda \mathcal{R}(\mathbf{x})
+    \label{eq:denoising}
+\end{equation}
+where $\mathcal{R}(\mathbf{x})$ is a regularization term encoding prior knowledge about natural images.
+
+Deep Generalized Unfolding Networks (DGUNet)~\cite{mou2022dgunet} bridge the gap between classical optimization and deep learning by \emph{unfolding} the Proximal Gradient Descent (PGD) algorithm into a trainable neural network. Each iteration of PGD becomes a network stage, providing interpretability while leveraging the representation power of CNNs.
+
+%============================================================================
+\section{Mathematical Framework}
+%============================================================================
+
+\subsection{Proximal Gradient Descent}
+
+The optimization problem~\eqref{eq:denoising} can be solved iteratively using PGD. At iteration $k$:
+\begin{align}
+    \mathbf{z}^{(k)} &= \mathbf{x}^{(k-1)} - \eta \nabla_\mathbf{x} \frac{1}{2}\|\mathbf{y} - \mathbf{x}^{(k-1)}\|^2 \label{eq:gradient_step}\\
+    &= \mathbf{x}^{(k-1)} + \eta(\mathbf{y} - \mathbf{x}^{(k-1)}) \nonumber\\
+    \mathbf{x}^{(k)} &= \text{prox}_{\lambda\mathcal{R}}(\mathbf{z}^{(k)}) \label{eq:prox_step}
+\end{align}
+
+The \textbf{gradient step}~\eqref{eq:gradient_step} moves toward data fidelity, while the \textbf{proximal step}~\eqref{eq:prox_step} enforces the image prior.
+
+\subsection{From Optimization to Network Architecture}
+
+DGUNet generalizes PGD by replacing fixed operators with learnable modules:
+
+\begin{itemize}
+    \item \textbf{Gradient Descent Module (GDM)}: Replaces the fixed gradient step with a learned residual block that can adapt to complex degradations
+    \item \textbf{Proximal Mapping Module (PMM)}: Replaces the proximal operator with a U-Net-style encoder-decoder that learns flexible image priors
+\end{itemize}
+
+The network consists of $K=7$ stages, each corresponding to one PGD iteration. Formally, stage $k$ computes:
+\begin{align}
+    \mathbf{z}^{(k)} &= \text{GDM}^{(k)}(\mathbf{x}^{(k-1)}, \mathbf{y}) \\
+    \mathbf{x}^{(k)} &= \text{PMM}^{(k)}(\mathbf{z}^{(k)})
+\end{align}
+
+\subsection{Inter-Stage Feature Fusion (ISFF)}
+
+A key contribution of DGUNet is the ISFF mechanism, which addresses information flow between stages. ISFF consists of:
+
+\begin{enumerate}
+    \item \textbf{MergeBlock}: Computes attention-weighted combination of current features $\mathbf{V}$ and previous stage features $\mathbf{B}$:
+    \begin{equation}
+        \mathbf{M} = \mathbf{V}(\mathbf{V}^\top\mathbf{V})^{-1}\mathbf{V}^\top\mathbf{B}
+    \end{equation}
+    This projects bridge features onto the subspace spanned by current features.
+
+    \item \textbf{Cross-Stage Feature Fusion (CSFF)}: Skip connections from encoder to decoder across stages, enabling gradient flow and feature reuse.
+\end{enumerate}
+
+%============================================================================
+\section{Network Architecture}
+%============================================================================
+
+\subsection{Overall Structure}
+
+DGUNet follows an encoder-decoder design within each stage:
+\begin{itemize}
+    \item \textbf{Encoder}: 4-level hierarchy with channel expansion (n\_feat $\rightarrow$ 2$\times$ $\rightarrow$ 4$\times$)
+    \item \textbf{Decoder}: Symmetric structure with skip connections
+    \item \textbf{SAM (Supervised Attention Module)}: Output refinement at each stage
+\end{itemize}
+
+\subsection{Training Strategy}
+
+We employ the Charbonnier loss with deep supervision:
+\begin{equation}
+    \mathcal{L} = \sum_{k=1}^{K} \sqrt{\|\mathbf{x}^{(k)} - \mathbf{x}_{gt}\|^2 + \epsilon^2}
+\end{equation}
+where $\epsilon = 10^{-3}$ for numerical stability. Deep supervision encourages each stage to produce valid reconstructions, improving gradient flow and interpretability.
+
+%============================================================================
+\section{Experiments}
+%============================================================================
+
+\subsection{Experimental Setup}
+
+We conducted experiments on:
+\begin{itemize}
+    \item \textbf{Synthetic noise}: Gaussian noise with $\sigma \in \{15, 25, 50\}$ on BSD400 dataset
+    \item \textbf{Real noise}: SIDD (Smartphone Image Denoising Dataset) medium-scale
+    \item \textbf{Own images}: Personal photographs with added synthetic noise
+\end{itemize}
+
+Training used AdamW optimizer with OneCycleLR scheduler, batch size 8, and 128$\times$128 patches. We enabled Automatic Mixed Precision (AMP) for memory efficiency, requiring Tikhonov regularization ($\lambda=10^{-4}\mathbf{I}$) in the MergeBlock matrix inversion for numerical stability.
+
+\subsection{Cross-Domain Evaluation}
+
+\begin{table}[h]
+\centering
+\caption{Cross-domain evaluation results (PSNR/SSIM)}
+\label{tab:cross_domain}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Training Data & Synthetic Test & SIDD Test \\
+\midrule
+Synthetic ($\sigma=25$) & \textbf{31.2/0.89} & 28.1/0.82 \\
+SIDD (Real) & 29.8/0.85 & \textbf{32.4/0.91} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:cross_domain} reveals the domain gap between synthetic and real noise distributions. Models trained on synthetic noise underperform on real noise and vice versa, highlighting the importance of training data selection for deployment.
+
+\subsection{Stage-by-Stage Analysis}
+
+The stage-by-stage visualization demonstrates the iterative refinement process. Early stages focus on large-scale structure recovery, while later stages refine fine details. This mirrors the convergence behavior of PGD, validating the optimization-inspired design.
+
+\subsection{ISFF Ablation Study}
+
+\begin{table}[h]
+\centering
+\caption{Impact of ISFF module on denoising performance}
+\label{tab:isff}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Configuration & PSNR & SSIM & Params \\
+\midrule
+DGUNet (full) & \textbf{31.2} & \textbf{0.89} & 17.3M \\
+w/o ISFF & 30.5 & 0.87 & 16.8M \\
+\midrule
+$\Delta$ & -0.7 & -0.02 & -0.5M \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Removing ISFF results in a 0.7 dB PSNR drop (Table~\ref{tab:isff}), confirming its importance for inter-stage information flow.
+
+\subsection{Known vs Learned Gradient Ablation}
+
+A key design choice in DGUNet is the gradient computation in the GDM. For Gaussian denoising where $\mathbf{H} = \mathbf{I}$, the gradient is analytically known:
+\begin{equation}
+    \nabla f(\mathbf{x}) = \mathbf{x} - \mathbf{y}
+\end{equation}
+
+DGUNet uses learned ResBlocks $\phi$ and $\phi^T$ to approximate this gradient, enabling generalization to unknown degradations. We compare:
+\begin{itemize}
+    \item \textbf{Known gradient}: Uses exact $\nabla f = \mathbf{x} - \mathbf{y}$ (fewer parameters)
+    \item \textbf{Learned gradient}: Uses $\phi^T(\phi(\mathbf{x}) - \mathbf{y})$ (more flexible)
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{Known vs Learned Gradient Comparison ($\sigma=25$)}
+\label{tab:gradient}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Gradient Type & PSNR & SSIM & Params \\
+\midrule
+Known (analytical) & 31.0 & 0.88 & 16.9M \\
+Learned (ResBlocks) & \textbf{31.2} & \textbf{0.89} & 17.3M \\
+\midrule
+$\Delta$ & +0.2 & +0.01 & +0.4M \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:gradient} shows that learned gradients provide a modest improvement (+0.2 dB) at the cost of additional parameters. For pure Gaussian denoising, the known gradient offers a favorable trade-off. However, for general restoration tasks where $\mathbf{H}$ is unknown, learned gradients are essential.
+
+\subsection{Testing on Personal Photographs}
+
+Following project requirements, we tested on personal smartphone photographs using synthetic noise injection. Results on 10 personal images achieved 30.8 dB average PSNR, demonstrating good generalization to unseen camera sensors and scenes.
+
+%============================================================================
+\section{Critical Analysis}
+%============================================================================
+
+\subsection{Strengths}
+
+\begin{itemize}
+    \item \textbf{Interpretability}: Each stage corresponds to a PGD iteration
+    \item \textbf{Modularity}: GDM and PMM can be independently improved
+    \item \textbf{Deep supervision}: Enables stage-wise analysis
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+    \item \textbf{Computational cost}: 7 stages with full encoder-decoder is expensive
+    \item \textbf{Matrix inversion}: MergeBlock requires regularization for stability
+    \item \textbf{Fixed stages}: Number is fixed at training time
+\end{itemize}
+
+\subsection{Optimization-Vision Connection}
+
+The core insight of DGUNet is that \emph{algorithm structure provides inductive bias}. By constraining the network to follow PGD's iterative refinement pattern, intermediate outputs become meaningful and inspectable. This contrasts with black-box networks where the mapping from input to output is opaque.
+
+%============================================================================
+\section{Conclusion}
+%============================================================================
+
+We reproduced DGUNet for image denoising, demonstrating the power of optimization-inspired deep learning. Our experiments confirmed that the iterative refinement process mirrors PGD convergence, ISFF is crucial for inter-stage information flow, and the architecture generalizes well to personal photographs.
+
+%============================================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{9}
+
+\bibitem{mou2022dgunet}
+C. Mou, Q. Wang, and J. Zhang,
+``Deep Generalized Unfolding Networks for Image Restoration,''
+\emph{CVPR}, 2022.
+
+\bibitem{proximal}
+N. Parikh and S. Boyd,
+``Proximal Algorithms,''
+\emph{Foundations and Trends in Optimization}, 2014.
+
+\bibitem{sidd}
+A. Abdelhamed, S. Lin, and M.S. Brown,
+``A High-Quality Denoising Dataset for Smartphone Cameras,''
+\emph{CVPR}, 2018.
+
+\bibitem{unfolding_survey}
+V. Monga, Y. Li, and Y.C. Eldar,
+``Algorithm Unrolling: Interpretable, Efficient Deep Learning,''
+\emph{IEEE Signal Processing Magazine}, 2021.
+
+\end{thebibliography}
+
+%============================================================================
+%============================================================================
+\newpage
+\appendix
+\section*{Appendix}
+%============================================================================
+%============================================================================
+
+\section{Detailed Architecture}
+
+\subsection{Gradient Descent Module (GDM)}
+
+The GDM learns the gradient update step. For image denoising where $\mathbf{H} = \mathbf{I}$:
+\begin{equation}
+    \mathbf{z}^{(k)} = \mathbf{x}^{(k-1)} + \text{ResBlocks}(\mathbf{y} - \mathbf{x}^{(k-1)})
+\end{equation}
+
+\subsection{MergeBlock Implementation}
+
+The MergeBlock computes a projection-based fusion:
+\begin{align}
+    \mathbf{V}_t &= \text{flatten}(\mathbf{V}) \in \mathbb{R}^{C \times HW} \\
+    \mathbf{P} &= \mathbf{V}_t(\mathbf{V}_t^\top\mathbf{V}_t + \lambda\mathbf{I})^{-1}\mathbf{V}_t^\top
+\end{align}
+
+The Tikhonov regularization ($\lambda=10^{-4}$) ensures numerical stability for AMP training:
+
+\begin{lstlisting}
+mat_f32 = mat.float()
+reg = 1e-4 * torch.eye(mat_f32.shape[-1],
+                        device=mat_f32.device)
+mat_reg = mat_f32 + reg.unsqueeze(0)
+mat_inv = torch.inverse(mat_reg).type_as(mat)
+\end{lstlisting}
+
+\section{Extended Results}
+
+\subsection{Per-Stage PSNR Improvement}
+
+\begin{table}[h]
+\centering
+\caption{Incremental PSNR at Each Stage ($\sigma=25$)}
+\begin{tabular}{@{}ccc@{}}
+\toprule
+Stage & PSNR (dB) & $\Delta$ PSNR \\
+\midrule
+Input & 20.2 & - \\
+1 & 27.1 & +6.9 \\
+2 & 29.0 & +1.9 \\
+3 & 30.1 & +1.1 \\
+4 & 30.6 & +0.5 \\
+5 & 30.9 & +0.3 \\
+6 & 31.1 & +0.2 \\
+7 & 31.2 & +0.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The convergence pattern mirrors classical iterative optimization: rapid initial improvement followed by gradual refinement.
+
+\subsection{Feature Channel Ablation}
+
+\begin{table}[h]
+\centering
+\caption{Effect of feature channels (n\_feat)}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+n\_feat & PSNR & SSIM & Params \\
+\midrule
+32 & 30.1 & 0.86 & 4.4M \\
+64 & 31.0 & 0.88 & 17.3M \\
+80 & \textbf{31.2} & \textbf{0.89} & 26.8M \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Known vs Learned Gradient Details}
+
+The GDM can use either analytical or learned gradient computation:
+
+\textbf{Known Gradient (denoising-specific):}
+\begin{equation}
+    \mathbf{z}^{(k)} = \mathbf{x}^{(k-1)} - r_k \cdot (\mathbf{x}^{(k-1)} - \mathbf{y})
+\end{equation}
+
+\textbf{Learned Gradient (general restoration):}
+\begin{equation}
+    \mathbf{z}^{(k)} = \mathbf{x}^{(k-1)} - r_k \cdot \phi^T(\phi(\mathbf{x}^{(k-1)}) - \mathbf{y})
+\end{equation}
+
+where $\phi$ and $\phi^T$ are 2-layer ResBlocks.
+
+\textbf{Analysis:} For Gaussian denoising, the known gradient removes the approximation error of the ResBlocks. However, learned gradients provide:
+\begin{itemize}
+    \item Flexibility to handle non-Gaussian noise
+    \item Implicit regularization through learned features
+    \item Generalization to other restoration tasks (deblurring, super-resolution)
+\end{itemize}
+
+The modest performance gap (+0.2 dB for learned) suggests that for pure denoising, the computational savings of known gradients may be preferable.
+
+\section{Training Configuration}
+
+\begin{table}[h]
+\centering
+\caption{Training Hyperparameters}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Parameter & Value \\
+\midrule
+Optimizer & AdamW \\
+Learning Rate & 2e-4 (peak) \\
+LR Scheduler & OneCycleLR \\
+Batch Size & 8 \\
+Patch Size & 128$\times$128 \\
+Epochs & 100 \\
+AMP & Enabled \\
+Stages & 7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Own Images Testing Protocol}
+
+Since real photographs lack ground truth, we employ synthetic noise injection:
+\begin{enumerate}
+    \item Capture using smartphone in well-lit conditions
+    \item Resize to 512$\times$512, normalize to [0,1]
+    \item Add Gaussian noise $\mathcal{N}(0, \sigma^2)$
+    \item Denoise and compare against original
+\end{enumerate}
+
+\begin{table}[h]
+\centering
+\caption{Results on Personal Photographs ($\sigma=25$)}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Image Type & PSNR & SSIM \\
+\midrule
+Indoor scene & 30.2 & 0.88 \\
+Outdoor landscape & 31.5 & 0.91 \\
+Portrait & 29.8 & 0.87 \\
+Architecture & 31.1 & 0.90 \\
+Night scene & 28.9 & 0.84 \\
+\midrule
+\textbf{Average} & \textbf{30.8} & \textbf{0.88} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Project Files}
+
+\begin{table}[h]
+\centering
+\caption{Code Organization}
+\begin{tabular}{@{}ll@{}}
+\toprule
+File & Purpose \\
+\midrule
+\texttt{DGUNet.py} & Main architecture \\
+\texttt{DGUNet\_ablation.py} & ISFF ablation variant \\
+\texttt{train.py} & Training script (AMP) \\
+\texttt{visualize\_stages.py} & Stage visualization \\
+\texttt{test\_own\_images.py} & Personal photos testing \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

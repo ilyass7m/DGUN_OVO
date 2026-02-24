@@ -8,7 +8,7 @@ Reproduction and ablation study of [DGUNet (CVPR 2022)](https://arxiv.org/abs/22
 
 ---
 
-## Overview
+## Overview 
 
 This repository implements **Deep Generalized Unfolding Networks (DGUNet)** for image denoising, bridging classical optimization algorithms with deep learning through the **deep unfolding** paradigm.
 
@@ -77,31 +77,100 @@ pip install numpy scipy scikit-image matplotlib tqdm wandb yacs pillow
 
 ---
 
-## Project Structure
+## Datasets
+
+### Download Links
+
+| Dataset | Description | Download |
+|---------|-------------|----------|
+| **DIV2K** | 800 train + 100 val high-resolution images | [Official](https://data.vision.ee.ethz.ch/cvl/DIV2K/) |
+| **SIDD Small** | 160 real noisy/clean smartphone image pairs | [Official](https://www.eecs.yorku.ca/~kalMDCNN/datasets/SIDD_Small_sRGB_Only.zip) |
+
+### Dataset Structure
+
+After downloading, organize datasets as follows:
 
 ```
 Denoising_OVO/
-├── DGUNet.py              # Base DGUNet architecture (original paper)
-├── DGUNet_denoise.py      # DGUNet with known gradient option
-├── DGUNet_ablation.py     # DGUNet with ISFF ablation support
-├── train.py               # Main training script
-├── evaluate.py            # Evaluation utilities
-├── dataset_denoise.py     # Dataset classes (synthetic, SIDD, paired)
-├── losses.py              # Charbonnier and edge losses
-├── visualize_stages.py    # Stage-by-stage visualization
-├── test_own_images.py     # Test on custom images
-├── compare_gradient_ablation.py   # Known vs learned gradient comparison
-├── compare_isff_ablation.py       # ISFF ablation comparison
-├── Datasets/
-│   ├── DIV2K_train_HR/    # Training images
-│   ├── DIV2K_valid_HR/    # Validation images
-│   ├── SIDD_Small_sRGB_Only/  # Real noise dataset
-│   └── own_images/        # Your test images
-├── checkpoints/           # Saved models
-└── report/                # LaTeX report
+└── Datasets/
+    ├── DIV2K_train_HR/          # 800 training images
+    │   ├── 0001.png
+    │   ├── 0002.png
+    │   └── ...
+    ├── DIV2K_valid_HR/          # 100 validation images
+    │   ├── 0801.png
+    │   ├── 0802.png
+    │   └── ...
+    ├── SIDD_Small_sRGB_Only/    # Real noise dataset
+    │   ├── Data/
+    │   │   ├── 0001_001_S6_.../
+    │   │   │   ├── GT_SRGB_010.PNG      # Ground truth
+    │   │   │   └── NOISY_SRGB_010.PNG   # Noisy image
+    │   │   ├── 0002_001_S6_.../
+    │   │   └── ... (160 scenes)
+    │   └── Scene_Instances.txt
+    └── own_images/              # Your test images (optional)
+        ├── photo1.jpg
+        └── ...
+```
+
+### Quick Setup
+
+```bash
+# Create dataset directories
+mkdir -p Datasets/DIV2K_train_HR Datasets/DIV2K_valid_HR Datasets/SIDD_Small_sRGB_Only Datasets/own_images
+
+# Download DIV2K (example with wget)
+wget https://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_train_HR.zip
+wget https://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_valid_HR.zip
+unzip DIV2K_train_HR.zip -d Datasets/
+unzip DIV2K_valid_HR.zip -d Datasets/
+
+# Download SIDD Small
+wget https://www.eecs.yorku.ca/~kaIDCNN/datasets/SIDD_Small_sRGB_Only.zip
+unzip SIDD_Small_sRGB_Only.zip -d Datasets/
 ```
 
 ---
+
+## Pretrained Checkpoints
+
+Download pretrained models from Google Drive:
+
+| Model | Training Data | PSNR | Download |
+|-------|---------------|------|----------|
+| **DGUNet (σ=25)** | DIV2K synthetic | 31.06 dB | [Google Drive](YOUR_GDRIVE_LINK_SYNTHETIC) |
+| **DGUNet (SIDD)** | SIDD real noise | 37.88 dB | [Google Drive](YOUR_GDRIVE_LINK_SIDD) |
+| **DGUNet (Known Grad)** | DIV2K σ=15 | 34.16 dB | [Google Drive](YOUR_GDRIVE_LINK_KNOWN) |
+
+### Checkpoint Structure
+
+Place downloaded checkpoints as follows:
+
+```
+Denoising_OVO/
+└── checkpoints/
+    ├── DGUNet-DIV2K-7-stages_sigma25/
+    │   └── model_best.pth
+    ├── DGUNet-SIDD-DIV2K-7-stages_sigma25/
+    │   └── model_best.pth
+    └── ablation_DGUN_known_A_DIV2K_sigma15/
+        └── model_best.pth
+```
+
+### Quick Download (after adding to Drive)
+
+```bash
+# Create checkpoint directory
+mkdir -p checkpoints
+
+# Download with gdown (pip install gdown)
+gdown --folder GDRIVE_FOLDER_ID -O checkpoints/
+```
+
+---
+
+
 
 ## Training
 
@@ -212,10 +281,11 @@ python train.py --n_feat 80 --name ablation_nfeat80 ...
 
 ## Evaluation
 
+### Evaluate on Test Set
 
 ```bash
 python evaluate.py \
-    --checkpoint ./checkpoints/dgunet_sigma25/model_best.pth \
+    --checkpoint ./checkpoints/DGUNet-DIV2K-7-stages_sigma25/model_best.pth \
     --dataset_dir ./Datasets/DIV2K_valid_HR \
     --sigma 25
 ```
@@ -224,7 +294,7 @@ python evaluate.py \
 
 ```bash
 python visualize_stages.py \
-    --checkpoint ./checkpoints/dgunet_sigma25/model_best.pth \
+    --checkpoint ./checkpoints/DGUNet-DIV2K-7-stages_sigma25/model_best.pth \
     --image ./Datasets/DIV2K_valid_HR/0801.png \
     --sigma 25
 ```
@@ -233,18 +303,12 @@ python visualize_stages.py \
 
 ```bash
 python test_own_images.py \
-    --checkpoint ./checkpoints/dgunet_sigma25/model_best.pth \
+    --checkpoint ./checkpoints/DGUNet-DIV2K-7-stages_sigma25/model_best.pth \
     --image_dir ./Datasets/own_images \
     --sigma 25
 ```
 
 ---
-
-
----
-
-```
-
 
 
 ---
