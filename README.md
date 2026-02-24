@@ -54,7 +54,7 @@ DGUNet unfolds K PGD iterations into K network stages:
 | Proximal operator | **PMM** (Proximal Mapping Module) | U-Net encoder-decoder |
 | — | **ISFF** (Inter-Stage Feature Fusion) | MergeBlock + CSFF for stage connectivity |
 
-![Architecture](figures/network.png)
+![Architecture](figures/network.PNG)
 *DGUNet architecture with 7 unfolding stages. Each stage corresponds to one PGD iteration.*
 
 ---
