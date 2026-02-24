@@ -139,9 +139,9 @@ Download pretrained models from Google Drive:
 
 | Model | Training Data | PSNR | Download |
 |-------|---------------|------|----------|
-| **DGUNet (σ=25)** | DIV2K synthetic | 31.06 dB | [Google Drive](YOUR_GDRIVE_LINK_SYNTHETIC) |
-| **DGUNet (SIDD)** | SIDD real noise | 37.88 dB | [Google Drive](YOUR_GDRIVE_LINK_SIDD) |
-| **DGUNet (Known Grad)** | DIV2K σ=15 | 34.16 dB | [Google Drive](YOUR_GDRIVE_LINK_KNOWN) |
+| **DGUNet (σ=25)** | DIV2K synthetic | 33.99 dB | [Google Drive](https://drive.google.com/file/d/1iamIhlBdwY9nvh3A-wI1ANwFZRCKYlCx/view?usp=drive_link) |
+| **DGUNet (SIDD)** | SIDD real noise | 37.88 dB | [Google Drive](https://drive.google.com/file/d/1drCuUrozKryvas3ByZE3bzsYmTOC1Oj7/view?usp=drive_link) |
+| **DGUNet (Known Grad)** | DIV2K σ=15 | 34.16 dB | [Google Drive](https://drive.google.com/file/d/1kBJ04_H5ENOFAGgWNz_-LmYAXh9Eza5t/view?usp=drive_link) |
 
 ### Checkpoint Structure
 
@@ -158,17 +158,7 @@ Denoising_OVO/
         └── model_best.pth
 ```
 
-### Quick Download (after adding to Drive)
 
-```bash
-# Create checkpoint directory
-mkdir -p checkpoints
-
-# Download with gdown (pip install gdown)
-gdown --folder GDRIVE_FOLDER_ID -O checkpoints/
-```
-
----
 
 
 
