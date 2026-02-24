@@ -4,7 +4,7 @@
 
 Reproduction and ablation study of [DGUNet (CVPR 2022)](https://arxiv.org/abs/2204.13348) for Gaussian color image denoising.
 
-[![WandB Report](https://img.shields.io/badge/WandB-Report-yellow)](YOUR_WANDB_REPORT_LINK_HERE)
+[![WandB Report](https://img.shields.io/badge/WandB-Report-yellow)](https://api.wandb.ai/links/ilyass7m-centralesup-lec/8quoe741)
 
 ---
 
@@ -54,7 +54,7 @@ DGUNet unfolds K PGD iterations into K network stages:
 | Proximal operator | **PMM** (Proximal Mapping Module) | U-Net encoder-decoder |
 | — | **ISFF** (Inter-Stage Feature Fusion) | MergeBlock + CSFF for stage connectivity |
 
-![Architecture](figures/architecture.png)
+![Architecture](figures/network.png)
 *DGUNet architecture with 7 unfolding stages. Each stage corresponds to one PGD iteration.*
 
 ---
@@ -63,7 +63,7 @@ DGUNet unfolds K PGD iterations into K network stages:
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/Denoising_OVO.git
+git clone https://github.com/ilyass7m/DGUN_OVO.git
 cd Denoising_OVO
 
 # Create environment
@@ -212,7 +212,6 @@ python train.py --n_feat 80 --name ablation_nfeat80 ...
 
 ## Evaluation
 
-### Evaluate on Synthetic Noise
 
 ```bash
 python evaluate.py \
@@ -241,46 +240,12 @@ python test_own_images.py \
 
 ---
 
-## Results
-
-### Synthetic Noise (σ=25, DIV2K)
-
-| Model | PSNR (dB) | SSIM |
-|-------|-----------|------|
-| DGUNet (n_feat=80) | 31.06 | 0.877 |
-| DGUNet (n_feat=64) | 30.47 | 0.862 |
-| DGUNet (n_feat=32) | 29.49 | 0.838 |
-
-### Cross-Domain Generalization
-
-| Training → Test | Synthetic | SIDD |
-|-----------------|-----------|------|
-| Synthetic (σ=25) | **31.06** | 30.61 |
-| SIDD (real) | 24.32 | **37.88** |
 
 ---
 
-## Key Implementation Details
-
-### MergeBlock Numerical Stability
-
-The MergeBlock performs matrix inversion which can be unstable in half-precision (AMP). We add Tikhonov regularization:
-
-```python
-# Original (unstable in FP16)
-M = V @ (V.T @ V).inverse() @ V.T @ B
-
-# Fixed (stable)
-M = V @ (V.T @ V + λI).inverse() @ V.T @ B  # λ = 1e-4
 ```
 
-### Deep Supervision
 
-All 7 stages produce output images, supervised with Charbonnier loss:
-
-$$\mathcal{L} = \sum_{k=1}^{K} \mathcal{L}_{\text{char}}(\mathbf{x}^{(k)}, \mathbf{x}_{\text{gt}})$$
-
-where $\mathcal{L}_{\text{char}}(\mathbf{x}, \mathbf{y}) = \sqrt{\|\mathbf{x} - \mathbf{y}\|_2^2 + \epsilon^2}$
 
 ---
 
