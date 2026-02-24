@@ -3,6 +3,9 @@
 *.jpg
 *.PNG 
 *.txt
+
+#Report
+*.tex
 # Checkpoints et logs
 **/checkpoints/
 **/wandb/
